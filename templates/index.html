@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Traffic Intelligence System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+        <div class="sidebar-content">
+            <div class="sidebar-brand">
+                <div class="brand-icon">
+                    <i class="fas fa-traffic-light"></i>
+                </div>
+                <div class="brand-text">
+                    <h2>Traffic</h2>
+                    <p>Intelligence</p>
+                </div>
+            </div>
+            
+            <div class="sidebar-menu">
+                <a href="#dashboard" class="sidebar-link active" data-section="dashboard">
+                    <div class="link-icon" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                        <i class="fas fa-chart-line"></i>
+                    </div>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#analytics" class="sidebar-link" data-section="analytics">
+                    <div class="link-icon" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                        <i class="fas fa-analytics"></i>
+                    </div>
+                    <span>Analytics</span>
+                </a>
+                <a href="#video" class="sidebar-link" data-section="video">
+                    <div class="link-icon" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                        <i class="fas fa-video"></i>
+                    </div>
+                    <span>Live Feed</span>
+                </a>
+                <a href="#guide" class="sidebar-link" data-section="guide">
+                    <div class="link-icon" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
+                        <i class="fas fa-book"></i>
+                    </div>
+                    <span>Guide</span>
+                </a>
+            </div>
+            
+            <div class="sidebar-stats">
+                <div class="sidebar-stat">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);">
+                        <i class="fas fa-tachometer-alt"></i>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="navFPS">0</span>
+                        <span class="stat-label">FPS</span>
+                    </div>
+                </div>
+                <div class="sidebar-stat">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="navConfidence">0%</span>
+                        <span class="stat-label">Confidence</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="sidebar-footer">
+                <div class="status-badge">
+                    <span class="status-dot"></span>
+                    <span>Live</span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="main-wrapper">
+        <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <div class="logo-icon">🚦</div>
+                    <div>
+                        <h1>AI Traffic Intelligence System</h1>
+                        <p class="subtitle">Advanced Real-time Vehicle Detection & Traffic Analysis</p>
+                    </div>
+                </div>
+                <div class="status-indicator">
+                    <span class="status-dot"></span>
+                    <span>Live Monitoring</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Step-by-Step Guide Section -->
+        <section class="guide-section" id="guide">
+            <div class="guide-header">
+                <h2><i class="fas fa-list-ol"></i> How It Works</h2>
+                <button class="toggle-guide" onclick="toggleGuide()">
+                    <i class="fas fa-chevron-down" id="guideIcon"></i>
+                </button>
+            </div>
+            <div class="guide-content" id="guideContent">
+                <div class="steps">
+                    <div class="step-item">
+                        <div class="step-number">1</div>
+                        <div class="step-info">
+                            <h3>Video Input</h3>
+                            <p>System receives live video feed from camera or video file</p>
+                        </div>
+                    </div>
+                    <div class="step-item">
+                        <div class="step-number">2</div>
+                        <div class="step-info">
+                            <h3>YOLOv8 Detection</h3>
+                            <p>Advanced AI model detects vehicles (cars, trucks, buses, motorcycles) in real-time</p>
+                        </div>
+                    </div>
+                    <div class="step-item">
+                        <div class="step-number">3</div>
+                        <div class="step-info">
+                            <h3>Vehicle Tracking</h3>
+                            <p>Each vehicle is assigned a unique ID and tracked across frames</p>
+                        </div>
+                    </div>
+                    <div class="step-item">
+                        <div class="step-number">4</div>
+                        <div class="step-info">
+                            <h3>Speed Calculation</h3>
+                            <p>System calculates speed based on pixel movement and time difference</p>
+                        </div>
+                    </div>
+                    <div class="step-item">
+                        <div class="step-number">5</div>
+                        <div class="step-info">
+                            <h3>Traffic Analysis</h3>
+                            <p>Real-time analysis of traffic density, speed distribution, and vehicle types</p>
+                        </div>
+                    </div>
+                    <div class="step-item">
+                        <div class="step-number">6</div>
+                        <div class="step-info">
+                            <h3>Dashboard Display</h3>
+                            <p>All analytics displayed on modern web dashboard with live updates</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Content -->
+        <main class="main-content" id="dashboard">
+            <!-- Stats Grid -->
+            <div class="stats-grid">
+                <!-- Vehicle Count Card -->
+                <div class="stat-card primary">
+                    <div class="stat-icon">🚗</div>
+                    <div class="stat-info">
+                        <h3>Total Vehicles</h3>
+                        <p class="stat-value" id="vehicleCount">0</p>
+                        <span class="stat-label">Currently Detected</span>
+                    </div>
+                </div>
+
+                <!-- Traffic Level Card -->
+                <div class="stat-card" id="trafficCard">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-info">
+                        <h3>Traffic Level</h3>
+                        <p class="stat-value" id="trafficStatus">LOW</p>
+                        <span class="stat-label">Current Status</span>
+                    </div>
+                </div>
+
+                <!-- Average Speed Card -->
+                <div class="stat-card speed-card">
+                    <div class="stat-icon">⚡</div>
+                    <div class="stat-info">
+                        <h3>Avg Speed</h3>
+                        <p class="stat-value" id="avgSpeed">0</p>
+                        <span class="stat-label">km/h</span>
+                    </div>
+                </div>
+
+                <!-- Max Speed Card -->
+                <div class="stat-card speed-card">
+                    <div class="stat-icon">🏎️</div>
+                    <div class="stat-info">
+                        <h3>Max Speed</h3>
+                        <p class="stat-value" id="maxSpeed">0</p>
+                        <span class="stat-label">km/h</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Advanced Analytics Section -->
+            <section class="analytics-section" id="analytics">
+                <h2 class="section-title">
+                    <i class="fas fa-chart-bar"></i>
+                    Advanced Analytics
+                </h2>
+                
+                <div class="analytics-grid">
+                    <!-- Vehicle Types Breakdown -->
+                    <div class="analytics-card">
+                        <h3><i class="fas fa-car-side"></i> Vehicle Types</h3>
+                        <div class="vehicle-types">
+                            <div class="vehicle-type-item">
+                                <div class="type-info">
+                                    <span class="type-icon">🚗</span>
+                                    <span class="type-name">Cars</span>
+                                </div>
+                                <span class="type-count" id="carCount">0</span>
+                            </div>
+                            <div class="vehicle-type-item">
+                                <div class="type-info">
+                                    <span class="type-icon">🏍️</span>
+                                    <span class="type-name">Motorcycles</span>
+                                </div>
+                                <span class="type-count" id="motorcycleCount">0</span>
+                            </div>
+                            <div class="vehicle-type-item">
+                                <div class="type-info">
+                                    <span class="type-icon">🚌</span>
+                                    <span class="type-name">Buses</span>
+                                </div>
+                                <span class="type-count" id="busCount">0</span>
+                            </div>
+                            <div class="vehicle-type-item">
+                                <div class="type-info">
+                                    <span class="type-icon">🚚</span>
+                                    <span class="type-name">Trucks</span>
+                                </div>
+                                <span class="type-count" id="truckCount">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- System Performance -->
+                    <div class="analytics-card">
+                        <h3><i class="fas fa-cog"></i> System Performance</h3>
+                        <div class="performance-metrics">
+                            <div class="metric-item">
+                                <span class="metric-label">FPS</span>
+                                <div class="metric-bar">
+                                    <div class="metric-fill" id="fpsBar" style="width: 0%"></div>
+                                </div>
+                                <span class="metric-value" id="fpsValue">0</span>
+                            </div>
+                            <div class="metric-item">
+                                <span class="metric-label">Detection Confidence</span>
+                                <div class="metric-bar">
+                                    <div class="metric-fill" id="confidenceBar" style="width: 0%"></div>
+                                </div>
+                                <span class="metric-value" id="confidenceValue">0%</span>
+                            </div>
+                            <div class="metric-item">
+                                <span class="metric-label">Total Detected</span>
+                                <span class="metric-value-large" id="totalDetected">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Direction Analysis -->
+                    <div class="analytics-card">
+                        <h3><i class="fas fa-directions"></i> Traffic Direction</h3>
+                        <div class="direction-stats">
+                            <div class="direction-item">
+                                <i class="fas fa-arrow-left"></i>
+                                <span>Left</span>
+                                <span class="direction-count" id="leftCount">0</span>
+                            </div>
+                            <div class="direction-item">
+                                <i class="fas fa-arrow-right"></i>
+                                <span>Right</span>
+                                <span class="direction-count" id="rightCount">0</span>
+                            </div>
+                            <div class="direction-item">
+                                <i class="fas fa-arrow-up"></i>
+                                <span>Up</span>
+                                <span class="direction-count" id="upCount">0</span>
+                            </div>
+                            <div class="direction-item">
+                                <i class="fas fa-arrow-down"></i>
+                                <span>Down</span>
+                                <span class="direction-count" id="downCount">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Speed Analysis Section -->
+            <div class="speed-analysis">
+                <h2 class="section-title">
+                    <i class="fas fa-tachometer-alt"></i>
+                    Speed Distribution Analysis
+                </h2>
+                <div class="speed-bars">
+                    <div class="speed-bar-item">
+                        <div class="speed-bar-label">
+                            <span><i class="fas fa-walking"></i> Slow (0-30 km/h)</span>
+                            <span class="speed-count" id="slowCount">0</span>
+                        </div>
+                        <div class="speed-bar-container">
+                            <div class="speed-bar slow" id="slowBar"></div>
+                        </div>
+                    </div>
+                    <div class="speed-bar-item">
+                        <div class="speed-bar-label">
+                            <span><i class="fas fa-car"></i> Medium (30-60 km/h)</span>
+                            <span class="speed-count" id="mediumCount">0</span>
+                        </div>
+                        <div class="speed-bar-container">
+                            <div class="speed-bar medium" id="mediumBar"></div>
+                        </div>
+                    </div>
+                    <div class="speed-bar-item">
+                        <div class="speed-bar-label">
+                            <span><i class="fas fa-rocket"></i> Fast (60+ km/h)</span>
+                            <span class="speed-count" id="fastCount">0</span>
+                        </div>
+                        <div class="speed-bar-container">
+                            <div class="speed-bar fast" id="fastBar"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Video Stream Section -->
+            <div class="video-section" id="video">
+                <div class="video-header">
+                    <h2 class="section-title">
+                        <i class="fas fa-video"></i>
+                        Live Video Feed with AI Analysis
+                    </h2>
+                    <div class="video-controls">
+                        <span class="control-info">
+                            <i class="fas fa-info-circle"></i>
+                            Vehicles are tracked with unique IDs and speed
+                        </span>
+                    </div>
+                </div>
+                <div class="video-container">
+                    <img src="{{ url_for('video') }}" alt="Traffic Stream" id="videoStream">
+                    <div class="video-overlay">
+                        <div class="overlay-info">
+                            <i class="fas fa-circle"></i>
+                            <span>LIVE</span>
+                        </div>
+                    </div>
+                    <div class="video-stats-overlay">
+                        <div class="overlay-stat">
+                            <i class="fas fa-eye"></i>
+                            <span>AI Detection Active</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="footer-content">
+                <p><i class="fas fa-code"></i> Powered by YOLOv8 & Flask</p>
+                <p><i class="fas fa-chart-line"></i> AI Traffic Intelligence System v2.0</p>
+                <p><i class="fas fa-clock"></i> Real-time Monitoring & Analysis</p>
+            </div>
+        </footer>
+        </div>
+    </div>
+
+    <script>
+        function updateStats() {
+            fetch("/stats")
+                .then(res => res.json())
+                .then(data => {
+                    // Update vehicle count
+                    document.getElementById("vehicleCount").innerText = data.vehicles;
+                    
+                    // Update traffic status
+                    const trafficEl = document.getElementById("trafficStatus");
+                    const trafficCard = document.getElementById("trafficCard");
+                    
+                    trafficEl.innerText = data.traffic;
+                    trafficCard.className = "stat-card";
+                    
+                    if (data.traffic === "LOW") {
+                        trafficCard.classList.add("traffic-low");
+                    } else if (data.traffic === "MEDIUM") {
+                        trafficCard.classList.add("traffic-medium");
+                    } else {
+                        trafficCard.classList.add("traffic-high");
+                    }
+                    
+                    // Update speed stats
+                    document.getElementById("avgSpeed").innerText = data.avg_speed || 0;
+                    document.getElementById("maxSpeed").innerText = data.max_speed || 0;
+                    
+                    // Update vehicle types
+                    const types = data.vehicle_types || {};
+                    document.getElementById("carCount").innerText = types.car || 0;
+                    document.getElementById("motorcycleCount").innerText = types.motorcycle || 0;
+                    document.getElementById("busCount").innerText = types.bus || 0;
+                    document.getElementById("truckCount").innerText = types.truck || 0;
+                    
+                    // Update speed distribution
+                    const total = data.vehicles || 1;
+                    const slow = data.speed_distribution?.slow || 0;
+                    const medium = data.speed_distribution?.medium || 0;
+                    const fast = data.speed_distribution?.fast || 0;
+                    
+                    document.getElementById("slowCount").innerText = slow;
+                    document.getElementById("mediumCount").innerText = medium;
+                    document.getElementById("fastCount").innerText = fast;
+                    
+                    // Update speed bars
+                    const slowPercent = (slow / total) * 100;
+                    const mediumPercent = (medium / total) * 100;
+                    const fastPercent = (fast / total) * 100;
+                    
+                    document.getElementById("slowBar").style.width = slowPercent + "%";
+                    document.getElementById("mediumBar").style.width = mediumPercent + "%";
+                    document.getElementById("fastBar").style.width = fastPercent + "%";
+                    
+                    // Update system performance
+                    const fps = data.fps || 0;
+                    const confidence = data.detection_confidence || 0;
+                    const totalDetected = data.total_detected || 0;
+                    
+                    document.getElementById("navFPS").innerText = fps;
+                    document.getElementById("navConfidence").innerText = confidence + "%";
+                    document.getElementById("fpsValue").innerText = fps;
+                    document.getElementById("confidenceValue").innerText = confidence + "%";
+                    document.getElementById("totalDetected").innerText = totalDetected;
+                    
+                    // Update performance bars
+                    document.getElementById("fpsBar").style.width = Math.min((fps / 30) * 100, 100) + "%";
+                    document.getElementById("confidenceBar").style.width = confidence + "%";
+                    
+                    // Update direction stats
+                    const directions = data.direction_stats || {};
+                    document.getElementById("leftCount").innerText = directions.left || 0;
+                    document.getElementById("rightCount").innerText = directions.right || 0;
+                    document.getElementById("upCount").innerText = directions.up || 0;
+                    document.getElementById("downCount").innerText = directions.down || 0;
+                })
+                .catch(err => console.error("Error fetching stats:", err));
+        }
+
+        function toggleGuide() {
+            const content = document.getElementById("guideContent");
+            const icon = document.getElementById("guideIcon");
+            content.classList.toggle("expanded");
+            icon.classList.toggle("fa-chevron-down");
+            icon.classList.toggle("fa-chevron-up");
+        }
+
+        // Smooth scroll for sidebar links
+        document.querySelectorAll('.sidebar-link').forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const targetId = this.getAttribute('href').substring(1);
+                const targetElement = document.getElementById(targetId);
+                if (targetElement) {
+                    targetElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+                // Update active state
+                document.querySelectorAll('.sidebar-link').forEach(l => l.classList.remove('active'));
+                this.classList.add('active');
+            });
+        });
+
+        // Initial call and set interval
+        updateStats();
+        setInterval(updateStats, 1000);
+    </script>
+</body>
+</html>
