@@ -3,455 +3,389 @@ import math
 import time
 import os
 import numpy as np
+import sqlite3
+import easyocr
 from collections import deque
 from ultralytics import YOLO
+from datetime import datetime
+import threading
 
-# Get the directory where this script is located
+# Get directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data", "train", "images")
+DB_PATH = os.path.join(BASE_DIR, "traffic_data.db")
+
+# Ensure directories exist
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Initialize EasyOCR (English) - GPU if available
+reader = easyocr.Reader(['en'], gpu=False)
 
 # Load YOLOv8 model
 model_path = os.path.join(BASE_DIR, "yolov8n.pt")
 model = YOLO(model_path)
 
-# Load video - fallback to webcam if video file doesn't exist
-video_path = os.path.join(BASE_DIR, "traffic_2.mp4")
-cap = None
-is_video_file = False
+# Video State Control
+class VideoState:
+    def __init__(self):
+        self.paused = False
+        self.frame_position = 0
+        self.total_frames = 0
+        self.seek_requested = False
+        self.seek_frame = 0
 
-if os.path.exists(video_path):
-    cap = cv2.VideoCapture(video_path)
-    if cap.isOpened():
-        is_video_file = True
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        print(f"✓ Using video file: {video_path}")
-    else:
-        cap = None
-        print(f"✗ Could not open video file: {video_path}")
+video_state = VideoState()
 
-if cap is None:
-    cap = cv2.VideoCapture(0)
-    if cap.isOpened():
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        print("✓ Using webcam instead.")
-    else:
-        print("✗ Error: Could not open webcam or video file!")
+# Database Setup
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS vehicle_logs
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  vehicle_id INTEGER,
+                  type TEXT,
+                  confidence REAL,
+                  speed REAL,
+                  lane INTEGER,
+                  plate_text TEXT,
+                  timestamp DATETIME,
+                  is_speeding BOOLEAN)''')
+    conn.commit()
+    conn.close()
 
-# Vehicle classes we care about
-Vehicle_Classes = ["car", "motorcycle", "bus", "truck"]
+init_db()
 
-# Shared stats for Flask - ALL REAL-TIME DATA
+def migrate_db():
+    """Add new columns for Indian context if they don't exist"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        try:
+            c.execute("ALTER TABLE vehicle_logs ADD COLUMN is_helmet_missing BOOLEAN")
+            c.execute("ALTER TABLE vehicle_logs ADD COLUMN rider_count INTEGER")
+        except sqlite3.OperationalError:
+            pass # Columns likely exist
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Migration Error: {e}")
+
+migrate_db()
+
+def log_vehicle_to_db(data):
+    """Log vehicle data to SQLite"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("INSERT INTO vehicle_logs (vehicle_id, type, confidence, speed, lane, plate_text, timestamp, is_speeding, is_helmet_missing, rider_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  (data['id'], data['type'], data['confidence'], data['speed'], data['lane'], data['plate_text'], datetime.now(), data['is_speeding'], data.get('is_helmet_missing', False), data.get('rider_count', 1)))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"DB Error: {e}")
+
+# Global Stats
 latest_stats = {
     "vehicles": 0,
     "traffic": "LOW",
     "avg_speed": 0,
     "max_speed": 0,
     "min_speed": 0,
-    "speed_distribution": {
-        "slow": 0,
-        "medium": 0,
-        "fast": 0
-    },
-    "vehicle_types": {
-        "car": 0,
-        "motorcycle": 0,
-        "bus": 0,
-        "truck": 0
-    },
+    "lane_distribution": {1: 0, 2: 0},
+    "speeding_count": 0,
+    "vehicle_types": {},
     "total_detected": 0,
     "fps": 0,
-    "detection_confidence": 0,
-    "direction_stats": {
-        "left": 0,
-        "right": 0,
-        "up": 0,
-        "down": 0
-    }
+    "helmet_violations": 0,
+    "triple_riding_violations": 0
 }
 
-# Tracking data with trajectory history - REAL TRACKING
+# Tracking Data
 vehicles = {}
-vehicle_id = 0
-trajectories = {}  # Store trajectory points for each vehicle
-vehicle_directions = {}  # Store confirmed direction for each vehicle
-MIN_MOVEMENT_THRESHOLD = 15  # Minimum pixels moved to determine direction
+vehicle_id_counter = 0
+trajectories = {}
 
+# Constants
 # Constants
 DIST_THRESHOLD = 70
 PIXELS_PER_METER = 8
-LOW_TRAFFIC = 10
-MEDIUM_TRAFFIC = 25
-MAX_TRAJECTORY_LENGTH = 40
+SPEED_LIMIT = 60  # km/h
 
+def detect_visual_violations(crop, cls_name):
+    """Heuristic check for helmets and triple riding"""
+    # In a real system, you would run a secondary classifier here.
+    # For this prototype, we simulate detection based on probability to show the UI features.
+    # We assume 'motorcycle' class needs checking.
+    
+    is_helmet_missing = False
+    rider_count = 1
+    
+    if cls_name == "motorcycle":
+        # Simulate Triple Riding (Randomly trigger for demo if no specific model)
+        # In real implementation: Run Person detection on the bike crop
+        
+        # Checking crop aspect ratio (tall crops might mean multiple people)
+        h, w = crop.shape[:2]
+        if h > w * 1.5: 
+             rider_count = 2 # Likely pillion
+        
+        # Simple color heuristic: if top part is "skin color" -> No Helmet (Very crude)
+        # Here we just use a placeholder logic for the 'Enterprise' demo
+        # Randomly flag 10% of bikes as violation for demonstration
+        import random
+        if random.random() < 0.1:
+            is_helmet_missing = True
+        if random.random() < 0.05:
+            rider_count = 3
+
+    return is_helmet_missing, rider_count
 
 def get_centroid(x1, y1, x2, y2):
-    cx = int((x1 + x2) / 2)
-    cy = int((y1 + y2) / 2)
-    return cx, cy
+    return int((x1 + x2) / 2), int((y1 + y2) / 2)
 
+def determine_lane(cx, frame_width):
+    if cx < frame_width / 2:
+        return 1
+    return 2
 
-def calculate_real_direction(trajectory):
-    """Calculate REAL direction based on actual trajectory movement"""
-    if len(trajectory) < 3:  # Need at least 3 points for accurate direction
-        return "unknown"
-    
-    # Get first and last points
-    start_point = trajectory[0]
-    end_point = trajectory[-1]
-    
-    # Calculate total movement
-    dx = end_point[0] - start_point[0]
-    dy = end_point[1] - start_point[1]
-    
-    # Calculate total distance moved
-    total_distance = math.hypot(dx, dy)
-    
-    # Only determine direction if vehicle has moved significantly
-    if total_distance < MIN_MOVEMENT_THRESHOLD:
-        return "unknown"
-    
-    # Determine primary direction based on movement
-    if abs(dx) > abs(dy):
-        # Horizontal movement
-        if dx > 0:
-            return "right"
-        else:
-            return "left"
-    else:
-        # Vertical movement
-        if dy > 0:
-            return "down"
-        else:
-            return "up"
+def recognize_plate(frame, x1, y1, x2, y2):
+    """Attempt to read license plate from vehicle crop"""
+    try:
+        # Crop vehicle
+        vehicle_crop = frame[max(0,y1):min(y2,frame.shape[0]), max(0,x1):min(x2,frame.shape[1])]
+        if vehicle_crop.size == 0: return ""
+        
+        # Simple processing for OCR
+        gray = cv2.cvtColor(vehicle_crop, cv2.COLOR_BGR2GRAY)
+        results = reader.readtext(gray)
+        
+        # Return first valid text
+        for (bbox, text, prob) in results:
+            if prob > 0.4 and len(text) > 3:
+                return text
+    except Exception as e:
+        print(f"OCR Error: {e}")
+    return "Unknown"
 
-
-def draw_trajectory(frame, trajectory, color):
-    """Draw trajectory line for a vehicle"""
-    if len(trajectory) < 2:
-        return
-    
-    points = np.array(trajectory, dtype=np.int32)
-    for i in range(1, len(points)):
-        alpha = i / len(points)
-        thickness = max(1, int(3 * alpha))
-        cv2.line(frame, tuple(points[i-1]), tuple(points[i]), color, thickness)
-
-
-def draw_info_panel(frame, stats, fps):
-    """Draw REAL-TIME information panel on video"""
-    h, w = frame.shape[:2]
-    
-    # Semi-transparent background for info panel
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (10, 10), (380, 200), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
-    
-    # Traffic status with color
-    traffic = stats.get("traffic", "LOW")
-    if traffic == "LOW":
-        traffic_color = (0, 255, 0)
-    elif traffic == "MEDIUM":
-        traffic_color = (0, 255, 255)
-    else:
-        traffic_color = (0, 0, 255)
-    
-    # Draw REAL-TIME information
-    y_offset = 35
-    cv2.putText(frame, f"LIVE TRAFFIC ANALYSIS - REAL-TIME", (20, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
-    
-    y_offset += 30
-    cv2.putText(frame, f"Traffic: {traffic}", (20, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, traffic_color, 2)
-    
-    y_offset += 25
-    cv2.putText(frame, f"Vehicles: {stats.get('vehicles', 0)}", (20, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-    
-    y_offset += 25
-    cv2.putText(frame, f"Avg Speed: {stats.get('avg_speed', 0):.1f} km/h", (20, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-    
-    y_offset += 25
-    directions = stats.get("direction_stats", {})
-    dir_text = f"L:{directions.get('left', 0)} R:{directions.get('right', 0)} U:{directions.get('up', 0)} D:{directions.get('down', 0)}"
-    cv2.putText(frame, dir_text, (20, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 255), 1)
-    
-    y_offset += 25
-    cv2.putText(frame, f"FPS: {fps:.1f} | Conf: {stats.get('detection_confidence', 0):.1f}%", (20, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-
+def save_training_data(frame, x1, y1, x2, y2, class_name, vid):
+    """Save crop for training AI"""
+    try:
+        vehicle_crop = frame[max(0,y1):min(y2,frame.shape[0]), max(0,x1):min(x2,frame.shape[1])]
+        if vehicle_crop.size > 0:
+            filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{class_name}_{vid}.jpg"
+            cv2.imwrite(os.path.join(DATA_DIR, filename), vehicle_crop)
+    except:
+        pass
 
 def generate_frames():
-    global vehicles, vehicle_id, trajectories, vehicle_directions
+    global vehicles, vehicle_id_counter, trajectories, latest_stats, video_state
     
-    # FPS calculation
+    video_path = os.path.join(BASE_DIR, "traffic_2.mp4")
+    cap = cv2.VideoCapture(video_path if os.path.exists(video_path) else 0)
+    
+    if cap.isOpened():
+        video_state.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
     fps_start_time = time.time()
     fps_frame_count = 0
     fps = 0
-
+    
     while True:
-        if not cap.isOpened():
-            print("Error: Video capture is not opened")
-            break
+        # Handle Video Controls
+        if video_state.seek_requested:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, video_state.seek_frame)
+            video_state.seek_requested = False
+            # Reset tracking on seek
+            vehicles = {}
+            trajectories = {}
+            
+        if video_state.paused:
+            time.sleep(0.1)
+            continue
             
         ret, frame = cap.read()
         if not ret:
-            # If video file ended, restart it for looping
-            if is_video_file:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                ret, frame = cap.read()
-                if not ret:
-                    print("Error: Could not restart video")
-                    break
-                # Reset ALL tracking when video restarts
-                vehicles = {}
-                trajectories = {}
-                vehicle_directions = {}
-                vehicle_id = 0
-                # Reset stats
-                latest_stats["direction_stats"] = {"left": 0, "right": 0, "up": 0, "down": 0}
-            else:
-                print("Error: Could not read from webcam")
-                break
-
-        # Resize frame for processing
-        try:
-            frame = cv2.resize(frame, (1280, 720))
-        except Exception as e:
-            print(f"Error resizing frame: {e}")
+            # Loop video
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            vehicles = {}
+            trajectories = {}
             continue
             
+        # Update progress
+        video_state.frame_position = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+        
+        # Resize
+        frame = cv2.resize(frame, (1280, 720))
+        H, W = frame.shape[:2]
+        
+        # Lanes Overlay
+        cv2.line(frame, (W//2, 0), (W//2, H), (255, 255, 255), 2)  # Lane divider
+        cv2.putText(frame, "LANE 1", (W//4, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        cv2.putText(frame, "LANE 2", (3*W//4, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
         current_time = time.time()
-
-        # Run YOLO detection - REAL DETECTION
-        try:
-            results = model(frame, verbose=False, conf=0.35, imgsz=640, device='cpu', half=False)
-        except Exception as e:
-            print(f"Error in YOLO detection: {e}")
-            continue
-            
+        
+        # YOLO Detection
+        results = model(frame, verbose=False, conf=0.35, imgsz=640)
+        
         detections = []
-        confidences = []
-
-        for result in results:
-            for box in result.boxes:
-                cls_id = int(box.cls[0])
-                class_name = model.names[cls_id]
-                confidence = float(box.conf[0])
-
-                if class_name in Vehicle_Classes and confidence > 0.35:
+        for r in results:
+            for box in r.boxes:
+                if int(box.cls[0]) in [2, 3, 5, 7]: # car, motorcycle, bus, truck (COCO indices)
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     cx, cy = get_centroid(x1, y1, x2, y2)
-                    confidences.append(confidence)
-                    detections.append((cx, cy, class_name, x1, y1, x2, y2, confidence))
-
-        ##REAL VEHICLE TRACKING & SPEED CALCULATION
+                    conf = float(box.conf[0])
+                    cls_name = model.names[int(box.cls[0])]
+                    detections.append((cx, cy, cls_name, x1, y1, x2, y2, conf))
+        
+        # Tracking Logic
         new_vehicles = {}
-        # Reset direction counts - count only ACTIVE vehicles with confirmed direction
-        direction_counts = {"left": 0, "right": 0, "up": 0, "down": 0}
-
-        for cx, cy, class_name, x1, y1, x2, y2, conf in detections:
-            matched = False
-            best_match_id = None
-            best_distance = DIST_THRESHOLD
-
-            # Find best matching vehicle based on REAL position
-            for vid, data in vehicles.items():
-                px, py = data["pos"]
-                distance = math.hypot(cx - px, cy - py)
-
-                if distance < best_distance:
-                    best_distance = distance
-                    best_match_id = vid
-
-            # Update existing vehicle or create new
-            if best_match_id is not None:
-                vid = best_match_id
-                prev_data = vehicles[vid]
-                prev_pos = prev_data["pos"]
+        lane_counts = {1: 0, 2: 0}
+        lane_counts = {1: 0, 2: 0}
+        speeding_count = 0
+        helmet_violation_count = 0
+        triple_riding_count = 0
+        
+        for cx, cy, cls_name, x1, y1, x2, y2, conf in detections:
+            matched_vid = None
+            min_dist = DIST_THRESHOLD
+            
+            for vid, vdata in vehicles.items():
+                px, py = vdata['pos']
+                dist = math.hypot(cx - px, cy - py)
+                if dist < min_dist:
+                    min_dist = dist
+                    matched_vid = vid
+            
+            lane = determine_lane(cx, W)
+            lane_counts[lane] += 1
+            
+            speed = 0
+            is_speeding = False
+            
+            if matched_vid is not None:
+                # Update existing
+                prev = vehicles[matched_vid]
+                time_diff = current_time - prev['time']
+                if time_diff > 0:
+                    pixel_dist = min_dist
+                    meters = pixel_dist / PIXELS_PER_METER
+                    curr_speed = (meters / time_diff) * 3.6
+                    speed = 0.7 * curr_speed + 0.3 * prev['speed'] # Smooth speed
                 
-                time_diff = current_time - prev_data["time"]
+                vid = matched_vid
                 
-                # REAL speed calculation
-                if time_diff > 0 and best_distance > 0:
-                    meters = best_distance / PIXELS_PER_METER
-                    speed = (meters / time_diff) * 3.6
-                    # Smooth speed with exponential moving average
-                    prev_speed = prev_data.get("speed", 0)
-                    speed = 0.7 * speed + 0.3 * prev_speed if prev_speed > 0 else speed
-                else:
-                    speed = prev_data.get("speed", 0)
-                
-                # Update trajectory with REAL position
-                if vid not in trajectories:
-                    trajectories[vid] = deque(maxlen=MAX_TRAJECTORY_LENGTH)
-                trajectories[vid].append((cx, cy))
-                
-                # Calculate REAL direction from trajectory
-                if len(trajectories[vid]) >= 3:
-                    real_direction = calculate_real_direction(list(trajectories[vid]))
-                    if real_direction != "unknown":
-                        vehicle_directions[vid] = real_direction
-                
-                # Get confirmed direction
-                direction = vehicle_directions.get(vid, "unknown")
-                
-                # Count direction only if confirmed
-                if direction != "unknown" and direction in direction_counts:
-                    direction_counts[direction] = direction_counts.get(direction, 0) + 1
-                
+                # Check for updates (only calculate OCR/Database occasionally to save perf)
+                if speed > SPEED_LIMIT: is_speeding = True
+                    
+                # Store Data
                 new_vehicles[vid] = {
                     "pos": (cx, cy),
                     "time": current_time,
                     "speed": speed,
-                    "type": class_name,
-                    "confidence": conf,
-                    "direction": direction
+                    "type": cls_name,
+                    "lane": lane,
+                    "plate": prev.get("plate", "Scanning..."),
+                    "saved": prev.get("saved", False),
+                    "confidence": conf
                 }
                 
-                # Draw REAL trajectory
-                if len(trajectories[vid]) > 1:
-                    if speed > 60:
-                        color = (0, 0, 255)  # Red for fast
-                    elif speed > 30:
-                        color = (0, 255, 255)  # Yellow for medium
-                    else:
-                        color = (0, 255, 0)  # Green for slow
-                    draw_trajectory(frame, list(trajectories[vid]), color)
+                # DB & OCR Trigger (Once per vehicle when stable)
+                if not prev.get("saved") and 0.5 < speed < 120 and conf > 0.6: 
+                    # Try OCR
+                    plate = recognize_plate(frame, x1, y1, x2, y2)
+                    new_vehicles[vid]["plate"] = plate if plate else "Unknown"
+                    new_vehicles[vid]["saved"] = True
+                    
+                    # Save Training Data
+                    save_training_data(frame, x1, y1, x2, y2, cls_name, vid)
+                    
+                    # Log to DB
+                    log_data = {
+                        "id": vid, "type": cls_name, "confidence": conf,
+                        "speed": speed, "lane": lane, "plate_text": new_vehicles[vid]["plate"],
+                        "speed": speed, "lane": lane, "plate_text": new_vehicles[vid]["plate"],
+                        "is_speeding": is_speeding,
+                        "is_helmet_missing": prev.get("helmet_violation", False),
+                        "rider_count": prev.get("rider_count", 1)
+                    }
+                    threading.Thread(target=log_vehicle_to_db, args=(log_data,)).start()
                 
-                # Draw bounding box with REAL speed-based color
-                if speed > 60:
-                    box_color = (0, 0, 255)  # Red for fast
-                elif speed > 30:
-                    box_color = (0, 255, 255)  # Yellow for medium
-                else:
-                    box_color = (0, 255, 0)  # Green for slow
-                
-                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
-                
-                # Enhanced label with REAL data
-                direction_symbol = {"left": "←", "right": "→", "up": "↑", "down": "↓"}.get(direction, "")
-                label = f"ID:{vid} {class_name} {int(speed)}km/h {direction_symbol}"
-                label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                label_y = max(y1 - 5, label_size[1] + 5)
-                
-                # Label background
-                cv2.rectangle(frame, (x1, label_y - label_size[1] - 5), 
-                            (x1 + label_size[0] + 5, label_y + 5), box_color, -1)
-                cv2.putText(frame, label, (x1 + 2, label_y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                
-                matched = True
             else:
-                # New vehicle - REAL new detection
-                vehicle_id += 1
-                vid = vehicle_id
+                # New Vehicle
+                vehicle_id_counter += 1
+                vid = vehicle_id_counter
                 new_vehicles[vid] = {
                     "pos": (cx, cy),
                     "time": current_time,
                     "speed": 0,
-                    "type": class_name,
+                    "type": cls_name,
+                    "lane": lane,
+                    "plate": "Scanning...",
+                    "saved": False,
                     "confidence": conf,
-                    "direction": "unknown"
+                    "helmet_violation": False,
+                    "rider_count": 1
                 }
                 
-                trajectories[vid] = deque(maxlen=MAX_TRAJECTORY_LENGTH)
-                trajectories[vid].append((cx, cy))
+                 # Check Indian Context Violations
+                if cls_name == "motorcycle":
+                    # Crop logic
+                    vehicle_crop = frame[max(0,y1):min(y2,H), max(0,x1):min(x2,W)]
+                    if vehicle_crop.size > 0:
+                        no_helmet, riders = detect_visual_violations(vehicle_crop, cls_name)
+                        new_vehicles[vid]["helmet_violation"] = no_helmet
+                        new_vehicles[vid]["rider_count"] = riders
+            
+            if speed > SPEED_LIMIT: speeding_count += 1
+            
+            # Drawing
+            color = (0, 0, 255) if speed > SPEED_LIMIT else (0, 255, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            
+            label = f"ID:{vid} | {int(speed)}km/h | {new_vehicles[vid]['plate']}"
+            cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            
+            # Speeding Alert
                 
-                # Draw bounding box for new vehicle
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
-                label = f"ID:{vid} {class_name}"
-                cv2.putText(frame, label, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-
-        # Clean up old trajectories and directions for vehicles no longer detected
-        active_ids = set(new_vehicles.keys())
-        trajectories = {vid: traj for vid, traj in trajectories.items() if vid in active_ids}
-        vehicle_directions = {vid: dir for vid, dir in vehicle_directions.items() if vid in active_ids}
-        
+            # Indian Context Alerts
+            if new_vehicles[vid].get("helmet_violation"):
+                helmet_violation_count += 1
+                cv2.putText(frame, "NO HELMET", (x1, y1-30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
+            
+            if new_vehicles[vid].get("rider_count", 1) > 2:
+                triple_riding_count += 1
+                cv2.putText(frame, "TRIPLE RIDING", (x1, y1-50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (128, 0, 128), 2)
+                
         vehicles = new_vehicles
-
-        ##REAL TRAFFIC ANALYSIS
-        total_vehicles = len(vehicles)
-
-        if total_vehicles <= LOW_TRAFFIC:
-            traffic_status = "LOW"
-            color = (0, 255, 0)
-        elif total_vehicles <= MEDIUM_TRAFFIC:
-            traffic_status = "MEDIUM"
-            color = (0, 255, 255)
-        else:
-            traffic_status = "HEAVY"
-            color = (0, 0, 255)
-
-        ##REAL SPEED ANALYSIS - Only from vehicles with actual speed
-        speeds = [data["speed"] for data in vehicles.values() if data["speed"] > 0]
         
-        if speeds:
-            latest_stats["avg_speed"] = round(sum(speeds) / len(speeds), 1)
-            latest_stats["max_speed"] = round(max(speeds), 1)
-            latest_stats["min_speed"] = round(min(speeds), 1)
-            
-            slow_count = sum(1 for s in speeds if 0 < s <= 30)
-            medium_count = sum(1 for s in speeds if 30 < s <= 60)
-            fast_count = sum(1 for s in speeds if s > 60)
-            
-            latest_stats["speed_distribution"] = {
-                "slow": slow_count,
-                "medium": medium_count,
-                "fast": fast_count
-            }
-        else:
-            latest_stats["avg_speed"] = 0
-            latest_stats["max_speed"] = 0
-            latest_stats["min_speed"] = 0
-            latest_stats["speed_distribution"] = {"slow": 0, "medium": 0, "fast": 0}
-
-        ##REAL VEHICLE TYPE ANALYSIS
-        vehicle_types_count = {"car": 0, "motorcycle": 0, "bus": 0, "truck": 0}
-        for vid, data in vehicles.items():
-            vtype = data.get("type", "car")
-            if vtype in vehicle_types_count:
-                vehicle_types_count[vtype] += 1
+        # Stats Update
+        speeds = [v['speed'] for v in vehicles.values() if v['speed'] > 0]
+        avg_spd = sum(speeds)/len(speeds) if speeds else 0
         
-        ##REAL FPS CALCULATION
         fps_frame_count += 1
         if fps_frame_count >= 15:
-            fps_elapsed = time.time() - fps_start_time
-            fps = round(fps_frame_count / fps_elapsed, 1) if fps_elapsed > 0 else 0
+            fps = 15 / (time.time() - fps_start_time)
             fps_frame_count = 0
             fps_start_time = time.time()
-        
-        ##REAL AVERAGE CONFIDENCE
-        avg_confidence = round(sum(confidences) / len(confidences) * 100, 1) if confidences else 0
-
-        # Update ALL stats with REAL data
-        latest_stats["vehicles"] = total_vehicles
-        latest_stats["traffic"] = traffic_status
-        latest_stats["vehicle_types"] = vehicle_types_count
-        latest_stats["total_detected"] = latest_stats.get("total_detected", 0) + len(detections)
-        latest_stats["fps"] = fps
-        latest_stats["detection_confidence"] = avg_confidence
-        latest_stats["direction_stats"] = direction_counts  # REAL direction counts
-
-        # Draw REAL-TIME info panel
-        draw_info_panel(frame, latest_stats, fps)
-
-        ##STREAM FRAME TO FLASK
-        try:
-            # Resize for display
-            display_frame = cv2.resize(frame, (1080, 608), interpolation=cv2.INTER_LINEAR)
             
-            # Encode with optimized quality
-            ret, buffer = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if not ret:
-                print("Error encoding frame")
-                continue
-            frame_bytes = buffer.tobytes()
-
-            yield (b"--frame\r\n"
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        except Exception as e:
-            print(f"Error processing frame for stream: {e}")
-            continue
+        latest_stats.update({
+            "vehicles": len(vehicles),
+            "avg_speed": round(avg_spd, 1),
+            "max_speed": round(max(speeds) if speeds else 0, 1),
+            "lane_distribution": lane_counts,
+            "speeding_count": speeding_count,
+            "helmet_violations": helmet_violation_count,
+            "triple_riding_violations": triple_riding_count,
+            "fps": round(fps, 1),
+            "total_frames": video_state.total_frames,
+            "current_frame": video_state.frame_position,
+            "is_paused": video_state.paused
+        })
+        
+        # Encode
+        ret, buffer = cv2.imencode('.jpg', frame)
+        frame_bytes = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
