@@ -102,3 +102,44 @@ To use a **Real Live Traffic IP Camera** instead of the demo video:
 ## 👤 Author
 **Sonali Tiwari**
 *AI Engineer & Full Stack Developer*
+
+## ☁️ Deploy to Cloud Run
+
+You can containerize and deploy the Streamlit dashboard to Google Cloud Run.
+
+### 1. Build the Docker image
+```bash
+# From the project root
+docker build -t gcr.io/<YOUR_PROJECT_ID>/traffic-streamlit .
+```
+
+### 2. Push the image to Artifact Registry (or Container Registry)
+```bash
+# Enable the Artifact Registry API first if needed
+gcloud artifacts repositories create my-repo --repository-format=docker --location=europe-west1
+
+gcloud auth configure-docker europe-west1-docker.pkg.dev
+
+docker tag gcr.io/<YOUR_PROJECT_ID>/traffic-streamlit europe-west1-docker.pkg.dev/<YOUR_PROJECT_ID>/my-repo/traffic-streamlit:latest
+
+docker push europe-west1-docker.pkg.dev/<YOUR_PROJECT_ID>/my-repo/traffic-streamlit:latest
+```
+
+### 3. Deploy to Cloud Run
+```bash
+gcloud run deploy traffic-streamlit \
+  --image europe-west1-docker.pkg.dev/<YOUR_PROJECT_ID>/my-repo/traffic-streamlit:latest \
+  --region europe-west1 \
+  --platform managed \
+  --allow-unauthenticated \
+  --set-env-vars GEMINI_API_KEY=${GEMINI_API_KEY:-}
+```
+
+After deployment, Cloud Run will provide a secure HTTPS URL where the dashboard is accessible.
+
+### 4. Verify
+Open the URL in a browser; you should see the Streamlit UI with live traffic analytics.
+
+> **Note**: Ensure the `traffic_2.mp4` video file is included in the Docker image (it is copied by the Dockerfile). If you want to use a live camera feed, set the `VIDEO_PATH` environment variable accordingly.
+
+---

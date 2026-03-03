@@ -18,8 +18,8 @@ DB_PATH = os.path.join(BASE_DIR, "traffic_data.db")
 # Ensure directories exist
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Initialize EasyOCR (English) - GPU if available
-reader = easyocr.Reader(['en'], gpu=False)
+# Initialize EasyOCR (English) - auto-detect GPU
+reader = easyocr.Reader(['en'], gpu=True) # gpu=True will fallback to CPU if no GPU/CUDA found
 
 # Load YOLOv8 model
 model_path = os.path.join(BASE_DIR, "yolov8n.pt")
@@ -112,31 +112,34 @@ PIXELS_PER_METER = 8
 SPEED_LIMIT = 60  # km/h
 
 def detect_visual_violations(crop, cls_name):
-    """Heuristic check for helmets and triple riding"""
-    # In a real system, you would run a secondary classifier here.
-    # For this prototype, we simulate detection based on probability to show the UI features.
-    # We assume 'motorcycle' class needs checking.
-    
+    """Heuristic check for helmets and triple riding using color analysis."""
     is_helmet_missing = False
     rider_count = 1
-    
+
     if cls_name == "motorcycle":
-        # Simulate Triple Riding (Randomly trigger for demo if no specific model)
-        # In real implementation: Run Person detection on the bike crop
-        
-        # Checking crop aspect ratio (tall crops might mean multiple people)
         h, w = crop.shape[:2]
-        if h > w * 1.5: 
-             rider_count = 2 # Likely pillion
-        
-        # Simple color heuristic: if top part is "skin color" -> No Helmet (Very crude)
-        # Here we just use a placeholder logic for the 'Enterprise' demo
-        # Randomly flag 10% of bikes as violation for demonstration
-        import random
-        if random.random() < 0.1:
+        if h == 0 or w == 0:
+            return is_helmet_missing, rider_count
+
+        # --- Rider Count via aspect ratio ---
+        # Taller crops (relative to width) suggest a pillion rider
+        if h > w * 1.6:
+            rider_count = 2
+        if h > w * 2.2:
+            rider_count = 3  # Triple riding
+
+        # --- Helmet Detection via HSV color heuristic ---
+        # Check the top 40% of the crop for skin-tone colors.
+        # Skin tones in HSV: Hue 0-25, Sat 30-170, Val 80-255
+        # A helmet would NOT show significant skin tones on top.
+        top_region = crop[:int(h * 0.4), :]
+        hsv = cv2.cvtColor(top_region, cv2.COLOR_BGR2HSV)
+        lower_skin = np.array([0, 30, 80], dtype=np.uint8)
+        upper_skin = np.array([25, 170, 255], dtype=np.uint8)
+        skin_mask = cv2.inRange(hsv, lower_skin, upper_skin)
+        skin_ratio = np.sum(skin_mask > 0) / (top_region.shape[0] * top_region.shape[1] + 1e-5)
+        if skin_ratio > 0.25:  # >25% skin visible on top of rider -> likely no helmet
             is_helmet_missing = True
-        if random.random() < 0.05:
-            rider_count = 3
 
     return is_helmet_missing, rider_count
 
@@ -241,7 +244,7 @@ def generate_frames():
         # Tracking Logic
         new_vehicles = {}
         lane_counts = {1: 0, 2: 0}
-        lane_counts = {1: 0, 2: 0}
+        vehicle_type_counts = {}
         speeding_count = 0
         helmet_violation_count = 0
         triple_riding_count = 0
@@ -302,9 +305,12 @@ def generate_frames():
                     
                     # Log to DB
                     log_data = {
-                        "id": vid, "type": cls_name, "confidence": conf,
-                        "speed": speed, "lane": lane, "plate_text": new_vehicles[vid]["plate"],
-                        "speed": speed, "lane": lane, "plate_text": new_vehicles[vid]["plate"],
+                        "id": vid,
+                        "type": cls_name,
+                        "confidence": conf,
+                        "speed": speed,
+                        "lane": lane,
+                        "plate_text": new_vehicles[vid]["plate"],
                         "is_speeding": is_speeding,
                         "is_helmet_missing": prev.get("helmet_violation", False),
                         "rider_count": prev.get("rider_count", 1)
@@ -359,23 +365,45 @@ def generate_frames():
                 cv2.putText(frame, "TRIPLE RIDING", (x1, y1-50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (128, 0, 128), 2)
                 
         vehicles = new_vehicles
-        
+
+        # --- Aggregate vehicle type counts ---
+        for v in vehicles.values():
+            vt = v.get('type', 'unknown')
+            vehicle_type_counts[vt] = vehicle_type_counts.get(vt, 0) + 1
+
         # Stats Update
         speeds = [v['speed'] for v in vehicles.values() if v['speed'] > 0]
-        avg_spd = sum(speeds)/len(speeds) if speeds else 0
-        
+        avg_spd = sum(speeds) / len(speeds) if speeds else 0
+        max_spd = max(speeds) if speeds else 0
+        min_spd = min(speeds) if speeds else 0
+
+        # Traffic density classification
+        num_vehicles = len(vehicles)
+        if num_vehicles == 0:
+            traffic_level = "CLEAR"
+        elif num_vehicles <= 4:
+            traffic_level = "LOW"
+        elif num_vehicles <= 9:
+            traffic_level = "MEDIUM"
+        else:
+            traffic_level = "HIGH"
+
         fps_frame_count += 1
         if fps_frame_count >= 15:
             fps = 15 / (time.time() - fps_start_time)
             fps_frame_count = 0
             fps_start_time = time.time()
-            
+
+        latest_stats["total_detected"] += len(detections)
         latest_stats.update({
-            "vehicles": len(vehicles),
+            "vehicles": num_vehicles,
+            "traffic": traffic_level,
             "avg_speed": round(avg_spd, 1),
-            "max_speed": round(max(speeds) if speeds else 0, 1),
+            "max_speed": round(max_spd, 1),
+            "min_speed": round(min_spd, 1),
             "lane_distribution": lane_counts,
             "speeding_count": speeding_count,
+            "vehicle_types": vehicle_type_counts,
             "helmet_violations": helmet_violation_count,
             "triple_riding_violations": triple_riding_count,
             "fps": round(fps, 1),

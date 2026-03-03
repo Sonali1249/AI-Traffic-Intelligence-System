@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.mp4
+.env
+.env.example
+.git
+.gitignore

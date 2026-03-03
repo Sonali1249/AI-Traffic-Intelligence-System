@@ -2,8 +2,13 @@ from flask import Flask, render_template, Response, jsonify, request
 from traffic_core import generate_frames, latest_stats, video_state, DB_PATH
 from traffic_agent import TrafficAgent
 import sqlite3
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 agent = TrafficAgent(DB_PATH)
+
 
 app = Flask(__name__)
 
